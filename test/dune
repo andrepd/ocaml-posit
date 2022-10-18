@@ -1,0 +1,4 @@
+(tests
+ (names test1)
+ (libraries posit util alcotest qcheck qcheck-alcotest)
+)

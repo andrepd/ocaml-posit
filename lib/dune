@@ -1,0 +1,5 @@
+(library
+ (public_name posit)
+ (name posit)
+ (libraries ocaml_intrinsics zarith util)
+)

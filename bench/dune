@@ -1,0 +1,4 @@
+(executable
+ (name bench)
+ (libraries posit util core_bench)
+)
