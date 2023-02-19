@@ -27,6 +27,14 @@ module Bits = struct
   (** Aux function: true iff x and y have different signs *)
   let[@inline] unequal_signs x y = 
     bool_of_int @ (x lxor y) lsr (int_size-1)
+
+  (** As [x < 0], but very slightly faster *)
+  let[@inline] is_neg x = 
+    bool_of_int (x lsr (int_size-1))
+
+  (** Negate x if b is false *)
+  let[@inline] neg_if_not b x = 
+    if b then x else lnot x
 end
 
 (** Represents an integer value extended with a round and sticky bit. 
@@ -222,7 +230,8 @@ module Make (Params : sig val nbits : int val es : int end) = struct
 
   (* Encode/decode *)
 
-  (* Assumes x is not zero or nar *)
+  (** Interpret the posit x into its human-readable components, the "textbook" 
+      way. Assumes x is not zero or nar. *)
   let[@inline] interpret_regular x = 
     (* Get sign bit *)
     let sign = x > 0 in
@@ -259,12 +268,71 @@ module Make (Params : sig val nbits : int val es : int end) = struct
     else
       `Num (interpret_regular x)
 
-  (* Assumes x is not zero or nar *)
+  (* Decodes the posit x into binary exponent and signed "mantissa", the 
+     efficient way. Assumes x is not zero or nar. *)
   let[@inline] decode_regular x = 
-    let {sign; regime; exponent; fraction} = interpret_regular x in
-    let exp = r_e_to_exp regime exponent in
-    let frac = s_f_to_frac sign fraction in
-    {exp; frac}
+    (* This optimised decoding routine does not convert a number into its 
+       2s-complement absolute value for processing. It's sometimes not trivial 
+       why specific substeps hold. *)
+
+    (* Shift out the meaningless bits (no-op iff nbits = int_size) *)
+    let junk_length = int_size - nbits in
+    let x = x lsl junk_length in
+    
+    (* Decode the regime. x xor'ed with itself shifted by 1 will give us two 
+       things:
+
+       * The MSB is sign_bit ⊕ regime_bit, and therefore will be 0 if the 
+         regime is to be interpreted as a string of 0s, and vice-versa 
+         (remember negative posits are interpreted as their twos-complement)
+
+       * The remaining bits will be 0 during the run of 0s or 1s, and 1 in the 
+         final bit of that run: think for example
+             11110…
+           ⊕ 11100…
+           = 00010… 
+         meaning shifting this left by 1 and counting leading zeroes will give 
+         us regime length-1 (we call this regime_length_raw). 
+
+       Then, the regime value is related to the regime length as follows: if the 
+       "sign bit of the regime" (msb of the regime bits, i.e. whether we have a 
+       run of 0s or 1s) is 
+
+       * 0: regime = -regime_length = -(regime_length_raw+1) = lnot regime_length_raw
+       * 1: regime = regime_length-1 = regime_length_raw 
+
+       We use efficient bit-twiddling to accomplish this. *)
+    let sign = not @ Bits.is_neg x in
+    let x_xor = x lxor (x lsl 1) in
+    let regime_length_raw = Bits.clz (x_xor lsl 1) in
+    (* let regime_mask = x_xor asr int_size in
+    let regime = regime_length_raw lxor (lnot regime_mask) in *)
+    let regime_neg = Bits.is_neg x_xor in
+    let regime = Bits.neg_if_not regime_neg regime_length_raw in
+
+    (* Now we extract the exponent bits. There is: 1 bit sign, regime_raw+1 
+       bits regime, 1 bit regime terminator, so the exponent MSB is 
+       regime_raw+3 bits from the left. We want to shift it into es bits from 
+       the right. Therefore: 
+         1. Shift left by "regime_length_raw+3" to clear the regime bits
+         2. Negate if negative
+         3. Shift right by "int_size-es" to put in its place *)
+    let x' = (x lsl regime_length_raw) lsl 3 in
+    let exponent = (Bits.neg_if_not sign x') lsr (int_size - es) in
+
+    (* And the fraction bits. We need to
+         1. Shift left by "es" to clear the exponent bits
+         2. Shift right by 2 to place them in the "fraction" part of frac 
+            (remember the first two bits are the hidden bits: 0b01 = 1. for 
+            positive and 0b10 = -2 for negative). *)
+    let x'' = x' lsl es in
+    let fraction = x'' lsr 2 in
+
+    (* Finally, we just build exp from regime and exponent and frac from 
+       fraction and sign *)
+    let exp = (regime lsl es) + exponent in
+    let frac = (Int.min_int lsr (Bool.to_int sign)) + fraction in
+    {frac; exp}
 
   let decode x = 
     if is_zero x then

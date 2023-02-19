@@ -55,6 +55,28 @@ let encode_decode (module P : SIG) =
   (posit_range (module P)),
   (fun x -> P.(encode @ decode x) = x)
 
+let decode_interpret (module P : SIG) = 
+  (posit_range (module P)),
+  (fun x -> 
+    let decoded = P.decode x in
+    let interpreted = P.interpret x in
+    match decoded, interpreted with
+    | `Zero, `Zero -> true
+    | `Nar, `Nar -> true
+    | `Num x, `Num y -> 
+      let x = List.fold_left Q.mul Q.one [
+        (if x.exp >= 0 then Q.mul_2exp else Q.div_2exp) Q.one (Int.abs x.exp);
+        Q.of_ints x.frac P.frac_denom;
+      ] in
+      let y = List.fold_left Q.mul Q.one [
+        (if y.sign then Q.one else Q.minus_one);
+        (let exp = (y.regime lsl P.es) + y.exponent in (if exp >= 0 then Q.mul_2exp else Q.div_2exp) Q.one (Int.abs exp));
+        Q.add Q.one (Q.of_ints y.fraction P.frac_denom);
+      ] in
+      Q.equal x y
+    | _ -> false
+  )
+
 (* let%test "r_e_of_exp" = 
   let module P = P16_4 in
   P.r_e_to_exp (-5) *)
@@ -280,6 +302,15 @@ let () =
       qcheck ~name:"P32" ~count:20_000_000 @ encode_decode (module P32);
       qcheck ~name:"P62" ~count:20_000_000 @ encode_decode (module P62);
       qcheck ~name:"P63" ~count:20_000_000 @ encode_decode (module P63);
+    ];
+    "decode/interpret", [
+      q ~name:"P8"    @ exhaustive1 decode_interpret (module P8);
+      q ~name:"P16_0" @ exhaustive1 decode_interpret (module P16_0);
+      q ~name:"P16_4" @ exhaustive1 decode_interpret (module P16_4);
+      q ~name:"P16_12" @ exhaustive1 decode_interpret (module P16_12);
+      qcheck ~name:"P32" ~count:20_000_000 @ decode_interpret (module P32);
+      qcheck ~name:"P62" ~count:20_000_000 @ decode_interpret (module P62);
+      qcheck ~name:"P63" ~count:20_000_000 @ decode_interpret (module P63);
     ];
     "of_q/to_q", [
       qcheck ~name:"P16_0"  ~count:10_000 @ of_q_to_q (module P16_0);
